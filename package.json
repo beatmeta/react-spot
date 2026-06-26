@@ -1,0 +1,40 @@
+{
+  "name": "react-spot",
+  "version": "0.1.0",
+  "description": "Dev-only DOM to React source opener for React 19, Next.js, and Turbopack.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./next": {
+      "types": "./src/next.d.ts",
+      "import": "./src/next.js"
+    },
+    "./node": {
+      "types": "./src/node.d.ts",
+      "import": "./src/node.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "demo:next": "npm --prefix examples/next-turbopack run dev -- --turbo"
+  },
+  "dependencies": {
+    "@jridgewell/trace-mapping": "latest"
+  },
+  "keywords": [
+    "react",
+    "nextjs",
+    "turbopack",
+    "open-in-editor",
+    "fiber"
+  ]
+}

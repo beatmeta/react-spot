@@ -1,0 +1,23 @@
+import type { Metadata } from "next";
+import { ReactSpotDevtools } from "../components/ReactSpotDevtools";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "React Spot Turbopack Demo",
+  description: "Internal demo for react-spot with Next.js and Turbopack"
+};
+
+export default function RootLayout({
+  children
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body>
+        <ReactSpotDevtools />
+        {children}
+      </body>
+    </html>
+  );
+}
