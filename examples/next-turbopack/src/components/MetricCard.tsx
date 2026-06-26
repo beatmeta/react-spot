@@ -1,5 +1,8 @@
 "use client";
 
+import { MetricCardHeader } from "./MetricCardHeader";
+import { MetricCardValue } from "./MetricCardValue";
+
 type Metric = {
   label: string;
   value: number;
@@ -10,11 +13,8 @@ type Metric = {
 export function MetricCard({ metric }: { metric: Metric }) {
   return (
     <article className="metric-card" data-tone={metric.tone}>
-      <div>
-        <h3>{metric.label}</h3>
-        <p>{metric.detail}</p>
-      </div>
-      <strong className="metric-value">{metric.value}</strong>
+      <MetricCardHeader label={metric.label} detail={metric.detail} />
+      <MetricCardValue value={metric.value} />
     </article>
   );
 }

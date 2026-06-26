@@ -3,8 +3,8 @@ import { ReactSpotDevtools } from "../components/ReactSpotDevtools";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "React Spot Turbopack Demo",
-  description: "Internal demo for react-spot with Next.js and Turbopack"
+  title: "Show Component Turbopack Demo",
+  description: "Demo for show-component with Next.js and Turbopack"
 };
 
 export default function RootLayout({
