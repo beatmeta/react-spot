@@ -149,7 +149,7 @@ export function findChildFiber(
  *
  * @example
  * ```tsx
- * <ShowComponent
+ * <ReactSpot
  *   chainTransformer={createFormattedMessageTransformer()}
  * />
  * ```

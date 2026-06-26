@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Show Component Turbopack Demo",
-  description: "Demo for show-component with Next.js and Turbopack"
+  description: "Demo for react-spot with Next.js and Turbopack"
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 "use client";
 
-import { ShowComponent } from "react-spot";
+import { ReactSpot } from "react-spot";
 
 export function ReactSpotDevtools() {
   if (process.env.NODE_ENV === "production") {
@@ -8,7 +8,7 @@ export function ReactSpotDevtools() {
   }
 
   return (
-    <ShowComponent
+    <ReactSpot
       sourceRoot={process.env.NEXT_PUBLIC_SOURCE_ROOT}
       editorScheme="cursor"
     />

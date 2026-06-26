@@ -54,7 +54,7 @@ const resultCache = new Map<string, CachedResult>();
 // Set via:
 //   1. configureSourceRoot('/absolute/path/to/project')    — programmatic
 //   2. window.__SHOW_COMPONENT_SOURCE_ROOT__ = '/abs/path'  — global
-//   3. <ShowComponent sourceRoot="/abs/path" />              — prop (calls #1)
+//   3. <ReactSpot sourceRoot="/abs/path" />              — prop (calls #1)
 //
 // When unset, resolved paths are URL-relative (e.g. /src/scenarios/Foo.tsx).
 

@@ -62,7 +62,7 @@ export type {
   NavigationEvent,
 };
 
-export interface ShowComponentProps {
+export interface ReactSpotProps {
   /**
    * Called when the user triggers a navigation (Alt+Click or selecting a
    * component from the chain popover).  When provided the default
@@ -89,7 +89,7 @@ export interface ShowComponentProps {
    *
    * @example
    * // Open files in VS Code instead of Cursor
-   * <ShowComponent editorScheme="vscode" />
+   * <ReactSpot editorScheme="vscode" />
    */
   editorScheme?: string;
 
@@ -132,9 +132,9 @@ export interface ShowComponentProps {
    *
    * @example
    * ```tsx
-   * import { createFormattedMessageTransformer } from 'show-component/transformers/formatted-message';
+   * import { createFormattedMessageTransformer } from 'react-spot';
    *
-   * <ShowComponent
+   * <ReactSpot
    *   chainTransformer={createFormattedMessageTransformer()}
    * />
    * ```
@@ -151,7 +151,7 @@ function openInEditor(
   source: string,
   line: number,
   column: number,
-  onNavigate?: ShowComponentProps['onNavigate'],
+  onNavigate?: ReactSpotProps['onNavigate'],
   componentName?: string,
   editorScheme = 'cursor',
   debug?: boolean
@@ -198,7 +198,7 @@ function openInEditor(
  */
 async function resolveAndNavigate(
   component: ClickToNodeInfo,
-  onNavigate?: ShowComponentProps['onNavigate'],
+  onNavigate?: ReactSpotProps['onNavigate'],
   editorScheme?: string,
   debug?: boolean
 ): Promise<boolean> {
@@ -224,14 +224,14 @@ async function resolveAndNavigate(
   }
 }
 
-export function ShowComponent({
+export function ReactSpot({
   onNavigate,
   sourceRoot,
   editorScheme,
   getClickTarget,
   debug,
   chainTransformer,
-}: ShowComponentProps = {}) {
+}: ReactSpotProps = {}) {
   // Keep stable refs so event handlers registered once (in useEffect [])
   // always see the latest callbacks without re-registering listeners.
   const onNavigateRef = useRef(onNavigate);
