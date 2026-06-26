@@ -33,6 +33,16 @@ export type ClickToNodeInfo = {
 };
 
 /**
+ * 判断链路条目是否对应原生 DOM 元素（span、div 等）。
+ *
+ * 此类条目保留在完整 chain 中供精确定位 JSX 标签，
+ * 但不应出现在面包屑或右键菜单的组件层级视图中。
+ */
+export function isHostFiberEntry(entry: ClickToNodeInfo): boolean {
+  return typeof entry.fiber.type === 'string';
+}
+
+/**
  * 组件链路中单个组件的轻量句柄。
  *
  * 暴露给外部消费者（如 getClickTarget 回调），

@@ -7,7 +7,7 @@ import type {
   TransformedEntry,
 } from '../core/chain-transformer';
 import { applyTransformer } from '../core/chain-transformer';
-import { buildFiberChain, buildFiberReturnChain, getComponentName, getStackFrame } from '../core/fiber-utils';
+import { buildFiberChain, buildFiberReturnChain, getComponentName, getStackFrame, isHostFiberEntry } from '../core/fiber-utils';
 import { configureSourceRoot, resolveLocation } from '../core/source-location-resolver';
 import type { ClickToNodeInfo, ComponentHandle, NavigationEvent } from '../core/types';
 import { Popover, PopoverContent, PopoverTrigger } from './components/ui/popover';
@@ -518,12 +518,13 @@ export function ReactSpot({
       const rect = el.getBoundingClientRect();
       currentChain = buildFiberChain(el);
 
-      // 面包屑按从根到叶的顺序展示，过滤掉 React 内部节点
+      // 面包屑只展示用户组件，不显示 span/div 等原生 DOM
       const breadcrumb = currentChain
         .filter((c) => c.componentName !== 'Component (No Type)')
+        .filter((c) => !isHostFiberEntry(c))
         .map((c) => ({
           name: c.componentName,
-          isComponent: typeof c.fiber.type !== 'string',
+          isComponent: true,
         }))
         .reverse();
 
@@ -554,9 +555,8 @@ export function ReactSpot({
 
       if (currentChain.length === 0) return;
 
-      // 优先找用户定义的组件（跳过原生 DOM 元素如 div/span）
-      const target =
-        currentChain.find((c) => typeof c.fiber.type !== 'string') ?? currentChain[0];
+      // 优先用叶节点栈帧（含原生 DOM），实现 JSX 标签级定位
+      const target = currentChain.find((c) => c.stackFrame) ?? currentChain[0];
 
       if (getClickTargetRef.current) {
         const dbg = debugRef.current;
@@ -618,8 +618,10 @@ export function ReactSpot({
       setInspectMode(false);
       setHoverInfo(null);
 
-      // 右键菜单走 fiber.return 链，展示完整组件层级
-      const fullChain = buildFiberReturnChain(event.target as HTMLElement);
+      // 右键菜单只展示组件层级，原生 DOM 保留在完整 chain 中供跳转
+      const fullChain = buildFiberReturnChain(event.target as HTMLElement).filter(
+        (c) => !isHostFiberEntry(c)
+      );
       if (fullChain.length === 0) return;
 
       const ctx = buildTransformContext();

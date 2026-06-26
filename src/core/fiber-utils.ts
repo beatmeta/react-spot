@@ -1,5 +1,7 @@
 import type { ClickToNodeInfo, Fiber } from './types';
 
+export { isHostFiberEntry } from './types';
+
 /**
  * 从 fiber 中提取可读的组件名称。
  *
@@ -115,22 +117,74 @@ const STACK_FRAME_INDEX = 1;
 /**
  * 判断栈帧行是否为 React 运行时内部帧（无法解析为用户源码）。
  */
+/**
+ * 按路径关键词匹配的框架/运行时内部模块。
+ * 这些文件中的帧永远不会指向用户源码。
+ */
+const INTERNAL_PATH_KEYWORDS = [
+  // React 核心运行时
+  'react-dom',
+  'react-server-dom',
+  'react-jsx-dev-runtime',
+  'react-jsx-runtime',
+  'react/cjs/',
+  'react/dist/',
+  'react-reconciler',
+  'react-client',
+  'react-refresh',
+  // React 编译产物（node_modules 内）
+  'compiled/react/',
+  'compiled/react-dom/',
+  'compiled/react-server-dom',
+  // Next.js 内部
+  'next/dist/',
+  'next-server',
+  // 调度器
+  'scheduler',
+  // 打包器运行时
+  'webpack-internal',
+  'turbopack-ecmascript-runtime',
+  '__turbopack_',
+];
+
+/**
+ * 按函数名/标识符匹配的 React 内部栈帧。
+ * 这些是 React 运行时在 dev 模式下注入到调用栈中的。
+ */
+const INTERNAL_FUNCTION_KEYWORDS = [
+  // JSX 转换运行时函数
+  'jsxDEV',
+  'jsxProdSignatureRunningInDevWithDynamicChildren',
+  'jsxs',
+  // React.createElement 系列
+  'createElementWithValidation',
+  // React 调试栈注入
+  'fakeJSXCallSite',
+  'react-stack-top-frame',
+  'react_stack_bottom_frame',
+  'initializeElement',
+  'initializeFakeStack',
+  'createFakeJSXCallStack',
+  // React 调和器内部
+  'renderWithHooks',
+  'mountIndeterminateComponent',
+  'beginWork',
+  'performUnitOfWork',
+  'workLoopSync',
+  'callCallback',
+  'invokeGuardedCallbackDev',
+  // React Server Components 内部
+  'processServerComponentReturnValue',
+  'attemptResolveElement',
+];
+
 function isUnresolvableFrame(line: string): boolean {
-  if (
-    line.includes('react-dom') ||
-    line.includes('scheduler') ||
-    line.includes('react-server-dom')
-  )
-    return true;
-  if (
-    line.includes('fakeJSXCallSite') ||
-    line.includes('react-stack-top-frame') ||
-    line.includes('react_stack_bottom_frame') ||
-    line.includes('initializeElement') ||
-    line.includes('initializeFakeStack') ||
-    line.includes('createFakeJSXCallStack')
-  )
-    return true;
+  for (const keyword of INTERNAL_PATH_KEYWORDS) {
+    if (line.includes(keyword)) return true;
+  }
+  for (const keyword of INTERNAL_FUNCTION_KEYWORDS) {
+    if (line.includes(keyword)) return true;
+  }
   if (line.includes('<anonymous>')) return true;
   return false;
 }
@@ -159,7 +213,10 @@ export function getStackFrame(fiber: Fiber): string | undefined {
       meaningfulLines.push(line);
     }
   }
-  return meaningfulLines[STACK_FRAME_INDEX] || meaningfulLines[0] || undefined;
+  // 原生 DOM 取第 1 个有意义帧（即 JSX 标签创建点）；
+  // 函数组件取第 2 个，跳过编译器生成的 fakeJSXCallSite
+  const frameIndex = typeof fiber.type === 'string' ? 0 : STACK_FRAME_INDEX;
+  return meaningfulLines[frameIndex] || meaningfulLines[0] || undefined;
 }
 
 /**
@@ -479,19 +536,100 @@ if (typeof window !== 'undefined') {
 }
 
 /**
+ * 尝试将 owner 链上的当前节点写入 chain。
+ *
+ * 支持三种节点：原生 DOM（span/div）、用户组件 Fiber、RSC 虚拟 owner。
+ * 原生 DOM 仅在有可用栈帧时写入，避免无法跳转的空条目。
+ */
+function tryPushOwnerChainEntry(chain: ClickToNodeInfo[], current: unknown): void {
+  const node = current as Record<string, unknown>;
+
+  if (node.type && typeof node.type === 'string') {
+    const fiberNode = current as Fiber;
+    const stackFrame = getStackFrame(fiberNode);
+    if (!stackFrame) return;
+
+    let props: Record<string, unknown> | undefined;
+    try {
+      if (fiberNode.memoizedProps) {
+        props = fiberNode.memoizedProps;
+      }
+    } catch {
+      props = undefined;
+    }
+
+    chain.push({
+      componentName: getComponentName(fiberNode),
+      stackFrame,
+      fiber: fiberNode,
+      props,
+    });
+    return;
+  }
+
+  if (node.type && typeof node.type !== 'string') {
+    const fiberNode = current as Fiber;
+    if (!isUserComponent(fiberNode)) return;
+
+    let props: Record<string, unknown> | undefined;
+    try {
+      if (fiberNode.memoizedProps) {
+        props = fiberNode.memoizedProps;
+      }
+    } catch {
+      props = undefined;
+    }
+
+    chain.push({
+      componentName: getComponentName(fiberNode),
+      stackFrame: getStackFrame(fiberNode),
+      fiber: fiberNode,
+      props,
+    });
+    return;
+  }
+
+  if (node.name && typeof node.name === 'string' && !node.type) {
+    const name = node.name as string;
+    if (FRAMEWORK_COMPONENT_NAMES.has(name)) return;
+
+    for (const pattern of FRAMEWORK_NAME_PATTERNS) {
+      if (pattern.test(name)) return;
+    }
+
+    const stackFrame = resolveVirtualOwnerStackFrame(name, node);
+
+    if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__REACT_SPOT_DEBUG__) {
+      console.log(`[react-spot] virtual owner: ${name}`, {
+        extractedFrame: stackFrame,
+        debugLocation: node.debugLocation,
+      });
+    }
+
+    chain.push({
+      componentName: name,
+      stackFrame,
+      fiber: current as Fiber,
+      props: undefined,
+    });
+  }
+}
+
+/**
  * 从 DOM 元素开始，沿 owner 链向上遍历，构建完整的用户组件层级链。
  *
  * 兼容两种 owner 格式：
  * 1. 标准 Fiber 对象（客户端组件）—— 有 type、_debugOwner
  * 2. React 19 虚拟 owner（服务端组件跨 RSC 边界）—— 有 name、env、owner
  *
- * 过滤掉原生 DOM 元素和框架内部组件，只保留用户自己定义的组件。
+ * 过滤框架内部组件；原生 DOM 元素保留在 chain 中供精确定位，
+ * 由 UI 层自行过滤展示。
  *
  * Args:
  *   target: 被点击的 DOM 元素
  *
  * Returns:
- *   从叶到根的用户组件所有权层级链
+ *   从叶到根的完整 owner 链路（含原生 DOM）
  */
 export function buildFiberReturnChain(target: Element): ClickToNodeInfo[] {
   const chain: ClickToNodeInfo[] = [];
@@ -499,65 +637,14 @@ export function buildFiberReturnChain(target: Element): ClickToNodeInfo[] {
   if (!fiber) return chain;
 
   const seen = new WeakSet();
-
-  // 遍历 owner 链，兼容 Fiber 对象和 React 19 虚拟 owner
   let current: unknown = fiber;
+
   while (current && typeof current === 'object') {
     if (seen.has(current as object)) break;
     seen.add(current as object);
 
+    tryPushOwnerChainEntry(chain, current);
     const node = current as Record<string, unknown>;
-
-    // 判断是标准 Fiber（有 type 属性）还是虚拟 owner（有 name/env 属性）
-    if (node.type && typeof node.type !== 'string') {
-      // 标准 Fiber 对象
-      const fiberNode = current as Fiber;
-      if (isUserComponent(fiberNode)) {
-        let props: Record<string, unknown> | undefined;
-        try {
-          if (fiberNode.memoizedProps) {
-            props = fiberNode.memoizedProps;
-          }
-        } catch {
-          props = undefined;
-        }
-        chain.push({
-          componentName: getComponentName(fiberNode),
-          stackFrame: getStackFrame(fiberNode),
-          fiber: fiberNode,
-          props,
-        });
-      }
-    } else if (node.name && typeof node.name === 'string' && !node.type) {
-      // React 19 虚拟 owner（服务端组件跨 RSC 边界传递的轻量 owner 信息）
-      // 属性：name, key, env, owner, stack, props, debugTask, debugStack, debugLocation
-      const name = node.name as string;
-      if (!FRAMEWORK_COMPONENT_NAMES.has(name)) {
-        let isFramework = false;
-        for (const pattern of FRAMEWORK_NAME_PATTERNS) {
-          if (pattern.test(name)) { isFramework = true; break; }
-        }
-        if (!isFramework) {
-          const stackFrame = resolveVirtualOwnerStackFrame(name, node);
-
-          if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__REACT_SPOT_DEBUG__) {
-            console.log(`[react-spot] virtual owner: ${name}`, {
-              extractedFrame: stackFrame,
-              debugLocation: node.debugLocation,
-            });
-          }
-
-          chain.push({
-            componentName: name,
-            stackFrame,
-            fiber: current as Fiber,
-            props: undefined,
-          });
-        }
-      }
-    }
-
-    // React 19 虚拟 owner 用 .owner，标准 Fiber 用 ._debugOwner
     current = node._debugOwner ?? node.owner ?? null;
   }
 
@@ -567,14 +654,14 @@ export function buildFiberReturnChain(target: Element): ClickToNodeInfo[] {
 /**
  * 从 DOM 元素开始，沿 owner 链向上遍历，构建组件所有权链。
  *
- * 兼容标准 Fiber 和 React 19 虚拟 owner（服务端组件），过滤框架内部组件，
- * 只保留用户定义的组件。适合用于面包屑显示和左键快速跳转。
+ * 兼容标准 Fiber、原生 DOM 和 React 19 虚拟 owner（服务端组件），
+ * 过滤框架内部组件。完整 chain 含原生 DOM，供左键精确定位 JSX 标签。
  *
  * Args:
  *   target: 被点击的 DOM 元素
  *
  * Returns:
- *   从 DOM 元素到根的用户组件所有权链路
+ *   从 DOM 元素到根的完整 owner 链路（含原生 DOM）
  */
 export function buildFiberChain(target: Element): ClickToNodeInfo[] {
   const chain: ClickToNodeInfo[] = [];
@@ -588,46 +675,8 @@ export function buildFiberChain(target: Element): ClickToNodeInfo[] {
     if (seen.has(current as object)) break;
     seen.add(current as object);
 
+    tryPushOwnerChainEntry(chain, current);
     const node = current as Record<string, unknown>;
-
-    if (node.type && typeof node.type !== 'string') {
-      // 标准 Fiber 对象（客户端组件）
-      const fiberNode = current as Fiber;
-      if (isUserComponent(fiberNode)) {
-        let props: Record<string, unknown> | undefined;
-        try {
-          if (fiberNode.memoizedProps) {
-            props = fiberNode.memoizedProps;
-          }
-        } catch {
-          props = undefined;
-        }
-        chain.push({
-          componentName: getComponentName(fiberNode),
-          stackFrame: getStackFrame(fiberNode),
-          fiber: fiberNode,
-          props,
-        });
-      }
-    } else if (node.name && typeof node.name === 'string' && !node.type) {
-      // React 19 虚拟 owner（服务端组件）
-      const name = node.name as string;
-      if (!FRAMEWORK_COMPONENT_NAMES.has(name)) {
-        let isFramework = false;
-        for (const pattern of FRAMEWORK_NAME_PATTERNS) {
-          if (pattern.test(name)) { isFramework = true; break; }
-        }
-        if (!isFramework) {
-          chain.push({
-            componentName: name,
-            stackFrame: resolveVirtualOwnerStackFrame(name, node),
-            fiber: current as Fiber,
-            props: undefined,
-          });
-        }
-      }
-    }
-
     current = node._debugOwner ?? node.owner ?? null;
   }
 
