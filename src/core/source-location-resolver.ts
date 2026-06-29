@@ -22,6 +22,8 @@ export interface ResolvedSourceInfo extends OriginalSourceInfo {
 interface CachedSourceMapData {
   sourceContent: string;
   sourceMapContent: string;
+  // 缓存已解析的 JSON 对象，避免每次 mapToOriginalSource 时重复 JSON.parse
+  parsedSourceMap: Record<string, unknown>;
 }
 
 interface CachedResult {
@@ -536,13 +538,16 @@ export async function resolveSourceMap(
 /**
  * Maps a generated position to the original source via source map.
  * Returns the raw source path as-is — the caller resolves it (see `resolveSourcePath`).
+ *
+ * 接受可选的预解析 JSON 对象以跳过 JSON.parse（L2 缓存命中时直接传入）。
  */
 export async function mapToOriginalSource(
   frameInfo: StackFrameInfo,
-  sourceMapContent: string
+  sourceMapContent: string,
+  parsedMap?: Record<string, unknown>
 ): Promise<{ info: OriginalSourceInfo; sourceRoot?: string } | null> {
   try {
-    const sourceMap = JSON.parse(sourceMapContent);
+    const sourceMap = parsedMap ?? JSON.parse(sourceMapContent);
 
     const consumer = new SourceMapConsumer(sourceMap);
 
@@ -563,7 +568,7 @@ export async function mapToOriginalSource(
           column: originalPosition.column,
           name: originalPosition.name || undefined,
         },
-        sourceRoot: sourceMap.sourceRoot,
+        sourceRoot: (sourceMap as Record<string, unknown>).sourceRoot as string | undefined,
       };
     }
 
@@ -574,13 +579,18 @@ export async function mapToOriginalSource(
   }
 }
 
-/** Retrieves the original source content embedded in the source map, if available. */
+/**
+ * Retrieves the original source content embedded in the source map, if available.
+ *
+ * 接受可选的预解析 JSON 对象以跳过重复 JSON.parse。
+ */
 export async function getOriginalSourceContent(
   originalInfo: OriginalSourceInfo,
-  sourceMapContent: string
+  sourceMapContent: string,
+  parsedMap?: Record<string, unknown>
 ): Promise<string | null> {
   try {
-    const sourceMap = JSON.parse(sourceMapContent);
+    const sourceMap = parsedMap ?? JSON.parse(sourceMapContent);
     const consumer = new SourceMapConsumer(sourceMap);
 
     const sourceContent = consumer.sourceContentFor(originalInfo.source);
@@ -720,9 +730,23 @@ export async function resolveLocation(
 
       if (debug) console.log('Source map resolved (length:', sourceMapContent.length, ')');
 
+      // 预解析 JSON 并缓存，后续同 URL 的不同位置查询可直接复用，
+      // 避免每次 mapToOriginalSource 重复 JSON.parse + SourceMapConsumer 构建
+      let parsedSourceMap: Record<string, unknown>;
+      try {
+        parsedSourceMap = JSON.parse(sourceMapContent);
+      } catch {
+        if (debug) {
+          console.warn('Failed to parse source map JSON for:', effectiveUrl);
+          console.groupEnd();
+        }
+        return null;
+      }
+
       sourceMapData = {
         sourceContent: sourceResult.content,
         sourceMapContent,
+        parsedSourceMap,
       };
       boundedSet(sourceMapCache, url, sourceMapData, MAX_SOURCE_MAP_CACHE_SIZE);
       if (url !== effectiveUrl) {
@@ -732,7 +756,7 @@ export async function resolveLocation(
       if (debug) console.log('L2 cache hit for:', url);
     }
 
-    const mapResult = await mapToOriginalSource(frameInfo, sourceMapData.sourceMapContent);
+    const mapResult = await mapToOriginalSource(frameInfo, sourceMapData.sourceMapContent, sourceMapData.parsedSourceMap);
     if (!mapResult) {
       if (debug) {
         console.warn('Source map lookup returned no result for position', { line, column });
@@ -763,7 +787,8 @@ export async function resolveLocation(
     // Use the raw (pre-resolved) path for content lookup — that's what the source map indexes by
     const originalSourceContent = await getOriginalSourceContent(
       { ...originalInfo, source: rawSource },
-      sourceMapData.sourceMapContent
+      sourceMapData.sourceMapContent,
+      sourceMapData.parsedSourceMap
     );
 
     const result: ResolvedSourceInfo = {
