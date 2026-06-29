@@ -341,24 +341,26 @@ async function resolveViaNextDevServer(
     const { originalStackFrame } = first.value;
     let sourcePath = originalStackFrame.file || frameInfo.url;
 
-    // Next.js returns project-relative paths (e.g. "src/app/page.tsx").
-    // Convert to absolute using the configured source root so the editor
-    // can open the file directly.
-    if (
-      sourcePath &&
-      !sourcePath.startsWith('/') &&
-      !sourcePath.startsWith('file://') &&
-      !sourcePath.includes('://')
-    ) {
-      const fsRoot = getSourceRoot();
+    // Next.js/Turbopack 返回的路径有两种形式：
+    // 1. 纯相对路径："src/app/page.tsx"（无前导 /）
+    // 2. 虚拟根相对路径："/src/components/layout/AppShell.tsx"（有前导 / 但非真实绝对路径）
+    // 两种情况都需要拼接 sourceRoot 才能得到可打开的文件系统绝对路径。
+    // 真正的绝对路径特征：以 fsRoot 开头（如 /Users/...）或以 file:// 开头。
+    const fsRoot = getSourceRoot();
+    if (sourcePath && !sourcePath.includes('://')) {
       if (debug) {
-        console.log('Source path is relative, resolving with sourceRoot:', {
-          sourcePath,
-          fsRoot,
-        });
+        console.log('Resolving sourcePath with sourceRoot:', { sourcePath, fsRoot });
       }
       if (fsRoot) {
-        sourcePath = `${fsRoot}/${sourcePath}`;
+        if (sourcePath.startsWith(fsRoot)) {
+          // 已经是完整的文件系统绝对路径，无需处理
+        } else if (sourcePath.startsWith('/')) {
+          // 虚拟根相对路径（如 /src/...），拼接项目根
+          sourcePath = fsRoot + sourcePath;
+        } else {
+          // 纯相对路径（如 src/app/page.tsx），用 / 连接
+          sourcePath = `${fsRoot}/${sourcePath}`;
+        }
       }
     }
 
@@ -769,6 +771,16 @@ export async function resolveLocation(
       sourceContent: originalSourceContent || undefined,
     };
 
+    // 后验证：source map 可能错误地将 workspace 包映射到 React 运行时文件，
+    // 此时应视为解析失败，让调用方尝试其他候选栈帧
+    if (isRuntimeSource(result.source)) {
+      if (debug) {
+        console.warn('Resolved to runtime source, rejecting:', result.source);
+        console.groupEnd();
+      }
+      return null;
+    }
+
     boundedSet(resultCache, cacheKey, { originalSource: result }, MAX_RESULT_CACHE_SIZE);
 
     if (debug) {
@@ -791,6 +803,62 @@ export async function resolveLocation(
     console.error('Error resolving stack frame to original source:', error);
     return null;
   }
+}
+
+/**
+ * 检查解析出的源码路径是否指向第三方库或框架运行时文件（非用户代码）。
+ *
+ * 这是源码导航的核心守卫：当 source map 将位置映射到 node_modules 内的
+ * 第三方包源码时（如 next/src/client/image-component.tsx），该路径通常：
+ * 1. 在磁盘上不存在（包发布时不含原始 TS 源码）
+ * 2. 不是用户想要到达的位置（用户想去"使用处"而非"定义处"）
+ *
+ * 例外：pnpm workspace 链接的包会通过 symlink 直接解析到 workspace 目录，
+ * 不经过 .pnpm/ 虚拟存储，因此不会被误判。
+ */
+export function isRuntimeSource(source: string): boolean {
+  // pnpm 虚拟存储中的包 → 一定是第三方依赖
+  if (source.includes('node_modules/.pnpm/')) return true;
+
+  // node_modules 内部的包源码（排除直接 symlink 到 workspace 的情况）
+  if (source.includes('/node_modules/') && !isWorkspaceLinkedPath(source)) {
+    return true;
+  }
+
+  // Turbopack / webpack 打包器内部运行时文件
+  // source map 有时会映射到这些 bundler 内部模块，它们不在磁盘上存在
+  if (source.includes('[turbopack]') || source.includes('turbopack:')) return true;
+  if (source.includes('[webpack]') || source.includes('webpack-internal:')) return true;
+
+  // Next.js 构建输出目录中的文件（_next/static/chunks/ 等），
+  // 这些是编译产物而非用户源码
+  if (source.includes('/_next/static/') || source.includes('/.next/')) return true;
+
+  return false;
+}
+
+/**
+ * 判断一个包含 node_modules 的路径是否指向 workspace 链接的包。
+ *
+ * workspace 包的特征：路径中 node_modules 后面紧跟包名，
+ * 且该路径最终指向项目 workspace 内部（不含 .pnpm）。
+ * 此判断确保 monorepo 中自己的 packages 仍可正常导航。
+ */
+function isWorkspaceLinkedPath(source: string): boolean {
+  const fsRoot = getSourceRoot();
+  if (!fsRoot) return false;
+
+  // workspace 链接的路径解析后应以项目根目录开头，
+  // 且不经过 .pnpm 虚拟存储
+  if (source.startsWith(fsRoot) && !source.includes('.pnpm')) {
+    // 进一步检查：node_modules 之后的路径段是否又嵌套了 node_modules
+    // 如果有多层 node_modules，通常是第三方包的依赖
+    const afterFirstNodeModules = source.split('/node_modules/').slice(1);
+    if (afterFirstNodeModules.length <= 1) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Clears all caches (including the Next.js dev server availability flag). */

@@ -110,9 +110,13 @@ function getComponentNameFromType(type: unknown): string {
   }
 }
 
-// 栈帧提取使用第 2 行有意义的帧（跳过 React 内部帧后），
-// 因为第 1 行通常是 JSX 编译器生成的 fakeJSXCallSite
-const STACK_FRAME_INDEX = 1;
+// React 19 会在 _debugStack 中注入一个以组件自身名称命名的"自身帧"，
+// 用于让 Error 调用栈更可读。对于源码导航，我们需要跳过这个自身帧，
+// 取其后面的帧（即组件 JSX 在父组件中的使用位置）。
+// 但 workspace 包通过 HMR 模块加载时，自身帧可能不存在或已被过滤，
+// 此时 meaningful[0] 就已经是正确的使用位置。
+// 因此不能使用固定索引，需要通过函数名匹配来动态判断。
+const STACK_FRAME_INDEX_FALLBACK = 1;
 
 /**
  * 判断栈帧行是否为 React 运行时内部帧（无法解析为用户源码）。
@@ -145,6 +149,10 @@ const INTERNAL_PATH_KEYWORDS = [
   'webpack-internal',
   'turbopack-ecmascript-runtime',
   '__turbopack_',
+  '[turbopack]',
+  'turbopack:',
+  'hmr-runtime',
+  'hot-reloader',
 ];
 
 /**
@@ -213,10 +221,99 @@ export function getStackFrame(fiber: Fiber): string | undefined {
       meaningfulLines.push(line);
     }
   }
-  // 原生 DOM 取第 1 个有意义帧（即 JSX 标签创建点）；
-  // 函数组件取第 2 个，跳过编译器生成的 fakeJSXCallSite
-  const frameIndex = typeof fiber.type === 'string' ? 0 : STACK_FRAME_INDEX;
-  return meaningfulLines[frameIndex] || meaningfulLines[0] || undefined;
+
+  if (meaningfulLines.length === 0) return undefined;
+
+  // 原生 DOM 元素直接取第一个帧（JSX 标签创建点）
+  if (typeof fiber.type === 'string') {
+    return meaningfulLines[0];
+  }
+
+  // 函数组件：检测 meaningful[0] 是否为 React 注入的"自身帧"。
+  // React 19 会注入一个以组件名命名的帧，使调用栈更可读。
+  // 判断方法：检查帧中的函数名是否与当前 fiber 的组件名匹配。
+  // 若匹配，说明是自身帧，应跳过取 meaningful[1]（实际使用位置）。
+  // 若不匹配（如 workspace 包组件的自身帧被 HMR 过滤掉），meaningful[0] 已是使用位置。
+  const componentName = getComponentName(fiber);
+  const firstFrame = meaningfulLines[0];
+  if (isSelfFrame(firstFrame, componentName)) {
+    return meaningfulLines[STACK_FRAME_INDEX_FALLBACK] || meaningfulLines[0];
+  }
+
+  return firstFrame;
+}
+
+/**
+ * 检测栈帧行是否为 React 注入的组件"自身帧"。
+ *
+ * React 19 在 _debugStack 中注入形如 `at ComponentName (url:line:col)` 的帧，
+ * 函数名与当前组件名一致。通过比较帧中的函数名与 fiber 的组件名来判断。
+ */
+function isSelfFrame(frameLine: string, componentName: string): boolean {
+  // 提取帧中的函数名：匹配 "at FuncName (" 或 "FuncName@" 格式
+  const atMatch = frameLine.match(/^at\s+([^\s(]+)/);
+  const frameName = atMatch?.[1] ?? frameLine.match(/^([^@]+)@/)?.[1];
+  if (!frameName) return false;
+
+  // 直接匹配
+  if (frameName === componentName) return true;
+
+  // Memo(InnerName) / ForwardRef(InnerName) 包装：
+  // getComponentName 返回 "Memo(Foo)" 但 React 19 自身帧用的是内部函数名 "Foo"
+  const innerMatch = componentName.match(/^(?:Memo|ForwardRef)\((.+)\)$/);
+  if (innerMatch && frameName === innerMatch[1]) return true;
+
+  return false;
+}
+
+/**
+ * 获取 fiber 的所有有意义栈帧（按优先级排序）。
+ *
+ * 当首选栈帧解析到 React 运行时等无效位置时，调用方可逐个尝试后续候选帧。
+ * 对于函数组件，优先返回 STACK_FRAME_INDEX 处的帧，然后是其他所有帧；
+ * 对于原生 DOM 元素，优先返回 index 0 处的帧。
+ *
+ * Args:
+ *   fiber: React fiber 节点
+ *
+ * Returns:
+ *   按优先级排列的栈帧行数组，首元素与 getStackFrame 返回值一致
+ */
+export function getAllMeaningfulFrames(fiber: Fiber): string[] {
+  const stack = fiber._debugStack?.stack;
+  if (!stack) return [];
+
+  const lines = stack.split('\n');
+  const meaningfulLines: string[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line && !isUnresolvableFrame(line)) {
+      meaningfulLines.push(line);
+    }
+  }
+
+  if (meaningfulLines.length === 0) return [];
+
+  // 确定首选帧索引：与 getStackFrame 保持一致的智能检测逻辑
+  let preferredIndex = 0;
+  if (typeof fiber.type !== 'string' && meaningfulLines.length > 1) {
+    const componentName = getComponentName(fiber);
+    if (isSelfFrame(meaningfulLines[0], componentName)) {
+      preferredIndex = STACK_FRAME_INDEX_FALLBACK;
+    }
+  }
+
+  const preferred = meaningfulLines[preferredIndex];
+  if (!preferred) return meaningfulLines;
+
+  // 将首选帧放到数组头部，其余按原始顺序跟随
+  const result = [preferred];
+  for (let i = 0; i < meaningfulLines.length; i++) {
+    if (i !== preferredIndex) {
+      result.push(meaningfulLines[i]);
+    }
+  }
+  return result;
 }
 
 /**

@@ -122,7 +122,8 @@ function buildLabel(value: unknown, rule: TransformerRule): string {
 function buildResolveLocation(
   stackFrame: string | undefined,
   rule: TransformerRule,
-  ctx: ChainTransformContext
+  ctx: ChainTransformContext,
+  fiber?: Fiber
 ): (() => Promise<{ source: string; line: number; column: number } | null>) | undefined {
   if (!stackFrame) {
     if (ctx.debug) {
@@ -132,7 +133,23 @@ function buildResolveLocation(
   }
 
   return async () => {
-    const resolved = await ctx.resolveLocation(stackFrame);
+    let resolved = await ctx.resolveLocation(stackFrame);
+
+    // 首选帧解析失败时，尝试 fiber 的其他候选栈帧
+    if (!resolved && fiber) {
+      const fallbacks = ctx.getAllMeaningfulFrames(fiber);
+      for (const frame of fallbacks) {
+        if (frame === stackFrame) continue;
+        resolved = await ctx.resolveLocation(frame);
+        if (resolved) {
+          if (ctx.debug) {
+            console.log(LOG_PREFIX, `resolved via fallback frame for rule "${rule.name}"`);
+          }
+          break;
+        }
+      }
+    }
+
     if (!resolved) {
       if (ctx.debug) {
         console.warn(LOG_PREFIX, `source resolution returned null for rule "${rule.name}"`, {
@@ -234,7 +251,7 @@ function matchChildFiber(
     label: buildLabel(labelValue, rule),
     sourceEntry: info,
     props,
-    resolveLocation: buildResolveLocation(stackFrame, rule, ctx),
+    resolveLocation: buildResolveLocation(stackFrame, rule, ctx, matched),
   };
 }
 
@@ -292,7 +309,7 @@ function matchDirect(
     label: buildLabel(labelValue, rule),
     sourceEntry: { ...entry, stackFrame },
     props,
-    resolveLocation: buildResolveLocation(stackFrame, rule, ctx),
+    resolveLocation: buildResolveLocation(stackFrame, rule, ctx, entry.fiber),
   };
 }
 

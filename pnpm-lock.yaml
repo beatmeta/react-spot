@@ -39,6 +39,9 @@ importers:
 
   examples/next-turbopack:
     dependencies:
+      '@react-spot-example/ui':
+        specifier: workspace:*
+        version: link:../packages/ui
       next:
         specifier: latest
         version: 16.2.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -61,6 +64,19 @@ importers:
       '@types/react-dom':
         specifier: latest
         version: 19.2.3(@types/react@19.2.17)
+      typescript:
+        specifier: latest
+        version: 6.0.3
+
+  examples/packages/ui:
+    dependencies:
+      react:
+        specifier: '>=18'
+        version: 19.2.7
+    devDependencies:
+      '@types/react':
+        specifier: latest
+        version: 19.2.17
       typescript:
         specifier: latest
         version: 6.0.3

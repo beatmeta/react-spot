@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@react-spot-example/ui": "workspace:*",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",

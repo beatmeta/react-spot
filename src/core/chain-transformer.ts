@@ -41,6 +41,8 @@ export interface ChainTransformContext {
   ) => Promise<ResolvedSourceInfo | null>;
   getComponentName: (fiber: Fiber) => string;
   getStackFrame: (fiber: Fiber) => string | undefined;
+  /** 获取 fiber 的所有候选栈帧，用于首选帧解析失败时回退 */
+  getAllMeaningfulFrames: (fiber: Fiber) => string[];
   debug?: boolean;
 }
 

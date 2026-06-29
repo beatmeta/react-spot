@@ -1,9 +1,11 @@
 "use client";
 
+import { Button } from "@react-spot-example/ui";
+
 export function RefreshButton({ onClick }: { onClick: () => void }) {
   return (
-    <button className="refresh-button" onClick={onClick}>
+    <Button className="refresh-button" onClick={onClick}>
       Refresh metrics
-    </button>
+    </Button>
   );
 }

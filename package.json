@@ -1,6 +1,6 @@
 {
   "name": "react-spot",
-  "version": "0.0.1",
+  "version": "0.0.7",
   "description": "Dev-only DOM to React source opener for React 19, Next.js, and Turbopack.",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test",
-    "demo:next": "npm --prefix examples/next-turbopack run dev -- --turbo"
+    "demo:next": "pnpm --filter react-spot-next-turbopack-demo dev -- --turbo"
   },
   "dependencies": {
     "@jridgewell/source-map": "latest",

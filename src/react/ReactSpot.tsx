@@ -7,7 +7,7 @@ import type {
   TransformedEntry,
 } from '../core/chain-transformer';
 import { applyTransformer } from '../core/chain-transformer';
-import { buildFiberChain, buildFiberReturnChain, getComponentName, getStackFrame, isHostFiberEntry } from '../core/fiber-utils';
+import { buildFiberChain, buildFiberReturnChain, getAllMeaningfulFrames, getComponentName, getStackFrame, isHostFiberEntry } from '../core/fiber-utils';
 import { configureSourceRoot, resolveLocation } from '../core/source-location-resolver';
 import type { ClickToNodeInfo, ComponentHandle, NavigationEvent } from '../core/types';
 import { Popover, PopoverContent, PopoverTrigger } from './components/ui/popover';
@@ -193,8 +193,11 @@ function openInEditor(
 }
 
 /**
- * Resolves the source location for a single component and opens the editor.
- * Delegates to the resolver's own two-level cache.
+ * 解析组件源码位置并跳转到编辑器。
+ *
+ * 首先尝试首选栈帧；若解析失败（如 source map 错误地映射到 React 运行时），
+ * 则从 fiber 提取所有候选帧逐个尝试，直到找到有效的用户源码位置。
+ * 此回退机制解决 monorepo workspace 包在 Turbopack 编译后 source map 链路断裂的问题。
  */
 async function resolveAndNavigate(
   component: ClickToNodeInfo,
@@ -218,10 +221,54 @@ async function resolveAndNavigate(
       );
       return true;
     }
+
+    // 首选帧解析失败，尝试 fiber 的所有候选帧
+    const fallbackFrames = getAllMeaningfulFrames(component.fiber);
+    for (const frame of fallbackFrames) {
+      if (frame === component.stackFrame) continue;
+      const fallbackResolved = await resolveLocation(frame, debug);
+      if (fallbackResolved) {
+        if (debug) {
+          console.log('[react-spot] Resolved via fallback frame:', frame);
+        }
+        openInEditor(
+          fallbackResolved.source,
+          fallbackResolved.line,
+          fallbackResolved.column,
+          onNavigate,
+          component.componentName,
+          editorScheme,
+          debug
+        );
+        return true;
+      }
+    }
+
     return false;
   } catch {
     return false;
   }
+}
+
+/**
+ * 沿 owner chain 逐个尝试解析源码位置并跳转。
+ *
+ * 解决第三方库组件（如 next/image）的场景：当用户点击由库组件渲染的 DOM 元素时，
+ * 该 DOM 的栈帧指向库内部实现（不存在或不可达），此时应沿 chain 向上
+ * 找到最近的用户代码位置（即使用该库组件的 JSX 所在行）。
+ */
+async function resolveAndNavigateWithChainFallback(
+  chain: ClickToNodeInfo[],
+  onNavigate?: ReactSpotProps['onNavigate'],
+  editorScheme?: string,
+  debug?: boolean
+): Promise<boolean> {
+  for (const entry of chain) {
+    if (!entry.stackFrame) continue;
+    const success = await resolveAndNavigate(entry, onNavigate, editorScheme, debug);
+    if (success) return true;
+  }
+  return false;
 }
 
 export function ReactSpot({
@@ -292,6 +339,7 @@ export function ReactSpot({
       resolveLocation: (sf, dbg) => resolveLocation(sf, dbg ?? debugRef.current),
       getComponentName,
       getStackFrame,
+      getAllMeaningfulFrames,
     }),
     []
   );
@@ -564,18 +612,26 @@ export function ReactSpot({
           componentName: c.componentName,
           props: c.props,
           index: i,
-          resolveSource: () =>
-            c.stackFrame
-              ? resolveLocation(c.stackFrame, dbg).then((r) =>
-                  r ? { source: r.source, line: r.line, column: r.column } : null
-                )
-              : Promise.resolve(null),
+          resolveSource: async () => {
+            if (!c.stackFrame) return null;
+            const r = await resolveLocation(c.stackFrame, dbg);
+            if (r) return { source: r.source, line: r.line, column: r.column };
+            // 首选帧失败，尝试 fiber 的其他候选帧
+            const fallbacks = getAllMeaningfulFrames(c.fiber);
+            for (const frame of fallbacks) {
+              if (frame === c.stackFrame) continue;
+              const fr = await resolveLocation(frame, dbg);
+              if (fr) return { source: fr.source, line: fr.line, column: fr.column };
+            }
+            return null;
+          },
         }));
         Promise.resolve(getClickTargetRef.current(handles)).then((targetIndex) => {
           const idx = targetIndex ?? 0;
           if (idx >= 0 && idx < currentChain.length) {
-            resolveAndNavigate(
-              currentChain[idx],
+            // 从选中位置开始沿 chain 向上回退，处理库组件源码不可达的情况
+            resolveAndNavigateWithChainFallback(
+              currentChain.slice(idx),
               onNavigateRef.current,
               editorSchemeRef.current,
               debugRef.current
@@ -587,8 +643,10 @@ export function ReactSpot({
         const transformed = applyTransformer(currentChain, chainTransformerRef.current, ctx);
         if (transformed.length > 0) navigateFromEntry(transformed[0]);
       } else {
-        resolveAndNavigate(
-          target,
+        // 尝试解析首选目标；若失败（如第三方库组件源码不存在），
+        // 沿 owner chain 向上逐个尝试，直到找到可导航的用户代码位置
+        resolveAndNavigateWithChainFallback(
+          currentChain,
           onNavigateRef.current,
           editorSchemeRef.current,
           debugRef.current
